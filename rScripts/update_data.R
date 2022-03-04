@@ -8,19 +8,33 @@
 # Metadata and data is available at:
 #----------------------------------------------------------------------------------------
 
+# get arguments from command line (i.e., absolute path to working directory) -----------
+args = commandArgs(trailingOnly = TRUE)
+if (length(args) == 0) {
+  stop("Error: At least one argument must be supplied (path to witnessTree directory).",
+       call. = FALSE)
+} else if (length(args) >= 1) {
+  path = args[1] # absolute path
+} else {
+  stop("Error: Too many command line arguments supplied to R.")
+}
+#print(path)
+
 # load dependencies ---------------------------------------------------------------------
-if(!existsFunction("%>%")) library("tidyverse")
+if(!existsFunction("esat"))    suppressPackageStartupMessages(library("plantecophys")) # for calculation of vapour pressure deficit
+if(!existsFunction("%>%"))     suppressPackageStartupMessages(library("tidyverse"))
+if(!existsFunction("as_date")) suppressPackageStartupMessages(library("lubridate"))
 
 # loop over daily files and append them -------------------------------------------------
 for (y in 1930:2022) {  
-  filename <- paste0("./data/daily/en_climate_daily_QC_7014160_", y, "_P1D.csv")
-  tmp <- read_csv(file = filename, col_types = "ddciDiiicdcdcdcdcdcdcdcdcdcdcdc")
+  file_name <- paste0("./data/daily/en_climate_daily_QC_7014160_", y, "_P1D.csv")
+  tmp <- read_csv(file = file_name, col_types = "ddciDiiicdcdcdcdcdcdcdcdcdcdccc")
   
   # append the climate data -------------------------------------------------------------
   if (y == 1930) {
-    dailyData <- tmp
+    daily_data <- tmp
   } else {
-    dailyData <- full_join(dailyData, tmp, 
+    daily_data <- full_join(daily_data, tmp, 
                            by = c("Longitude (x)", "Latitude (y)", "Station Name", 
                                   "Climate ID", "Date/Time", "Year", "Month", "Day", 
                                   "Data Quality", "Max Temp (°C)", "Max Temp Flag", 
@@ -38,17 +52,19 @@ for (y in 1930:2022) {
 }
 
 # simplify data -------------------------------------------------------------------------
-dailyData <- dailyData %>% 
+daily_data <- daily_data %>% 
   select(6:8, seq(10, 30, by = 2)) %>% 
   rename(year = Year, month = Month, day = Day, 
          tmax = `Max Temp (°C)`, tmin = `Min Temp (°C)`, temp = `Mean Temp (°C)`, 
          GDD = `Heat Deg Days (°C)`, CDD = `Cool Deg Days (°C)`,
          rain = `Total Rain (mm)`, snow = `Total Snow (cm)`, prec = `Total Precip (mm)`,
          snoP = `Snow on Grnd (cm)`, 
-         winD = `Dir of Max Gust (10s deg)`, winS = `Spd of Max Gust (km/h)`)
+         winD = `Dir of Max Gust (10s deg)`, winS = `Spd of Max Gust (km/h)`) %>% 
+  mutate(winS = replace(winS, winS == "<31", "30")) %>% # wind gust data had "<" sign which caused problems
+  mutate(winS = as.numeric(winS))
 
 # delete empty rows from the future -----------------------------------------------------
-dailyData <- dailyData %>% 
+daily_data <- daily_data %>% 
   mutate(date = lubridate::as_date (paste(year, month, day)), .before = 1) %>%
   filter(date < Sys.Date())
   
@@ -58,11 +74,11 @@ for (y in 1994:2022) {
     if ((y == 1994 & m < 10) |
         (y == 2022 & m > 1)) next
     month <- ifelse(m < 10, paste0 ("0",m), as.character (m))  
-    filename <- paste0("./data/hourly/en_climate_hourly_QC_7014160_", month, "-", y, 
-                       "_P1H.csv")
+    file_name <- paste0("./data/hourly/en_climate_hourly_QC_7014160_", month, "-", y, 
+                        "_P1H.csv")
     string <- ifelse(y < 2001, "ddciTiiitdcdcdcdcdcdcdcdcdcc", 
                      "ddciTiiitdcdcdcdcdcdcdcdcdcdcc")
-    tmp <- read_csv(file = filename, col_types = string)
+    tmp <- read_csv(file = file_name, col_types = string)
   
     # add precipitation column before 2001 ----------------------------------------------
     if (y < 2001) tmp <- tmp %>% 
@@ -70,9 +86,9 @@ for (y in 1994:2022) {
     
     # append the climate data -----------------------------------------------------------
     if (y == 1994 & m == 10) {
-      hourlyData <- tmp
+      hourly_data <- tmp
     } else {
-      hourlyData <- full_join(hourlyData, tmp, 
+      hourly_data <- full_join(hourly_data, tmp, 
                               by = c("Longitude (x)", "Latitude (y)", "Station Name", 
                                      "Climate ID", "Date/Time (LST)", "Year", "Month", 
                                      "Day", "Time (LST)", "Temp (°C)", "Temp Flag", 
@@ -89,7 +105,7 @@ for (y in 1994:2022) {
 }
 
 # simplify data -------------------------------------------------------------------------
-hourlyData <- hourlyData %>% 
+hourly_data <- hourly_data %>% 
   select(5:10, seq(12, 27, by = 2), 29) %>% 
   rename(year = Year, month = Month, day = Day, time = `Time (LST)`,
          temp = `Temp (°C)`, dewp = `Dew Point Temp (°C)`, rehu = `Rel Hum (%)`, 
@@ -99,71 +115,109 @@ hourlyData <- hourlyData %>%
 
 # daily data has missing data in the end of 1999 and beginning of 2000 ------------------
 # here we fill the gap from aggregated hourly data
-tmpData <- hourlyData %>% select(-c(datetime, time)) %>% 
+tmp_data <- hourly_data %>% select(-c(datetime, time)) %>% 
   group_by(year, month, day) %>% 
   summarise(tmax = max(temp, na.rm = TRUE),
             tmin = min(temp, na.rm = TRUE),
             temp = mean(temp, na.rm = TRUE),
             prec = sum(prec, na.rm = TRUE), .groups = "drop") %>%
   mutate(date = lubridate::as_date(paste(year,month,day)), .before = 1)
-# concatenate three dataframes to get dataframe of same length as averaged hourlyData ---
-tmp2Data <- dailyData %>% filter(year ==  1994 & month >= 10)
-tmp3Data <- dailyData %>% filter(year >=  1995 & year < 2022)
-tmp4Data <- dailyData %>% filter(year == 2022 & month == 1)
-tmp5Data <- rbind(tmp2Data, tmp3Data, tmp4Data)
+# there are several warnings on due to lack of non-missing values, but that is fine
+
+# concatenate three dataframes to get dataframe of same length as averaged hourly_data ---
+tmp2_data <- daily_data %>% filter(year ==  1994 & month >= 10)
+tmp3_data <- daily_data %>% filter(year >=  1995 & year < 2022)
+tmp4_data <- daily_data %>% filter(year == 2022 & month == 1)
+tmp5_data <- rbind(tmp2_data, tmp3_data, tmp4_data)
 
 # plot daily temperatures versus daily mean hourly temperatures -------------------------
 PLOT <- FALSE
 if (PLOT) {
-  plot(x = tmpData$temp, y = tmp5Data$temp, typ = "p", pch = 19, col = "#91b9a433",
-       las = 1, xlab = expression (paste ("Daily mean temperature (",degree,"C)", sep = "")),
-       ylab = expression (paste ("Daily mean of hourly temperature (",degree,"C)", sep = "")))
+  plot(x = tmp_data$temp, y = tmp5_data$temp, typ = "p", pch = 19, col = "#91b9a433",
+       las = 1, xlab = expression(paste("Daily mean temperature (",degree,"C)", sep = "")),
+       ylab = expression(paste("Daily mean of hourly temperature (",degree,"C)", sep = "")))
   abline(b = 1, a = 0, col = "#666666", lty = 2)
-  summary(lm(tmpData$temp ~ tmp5Data$temp))
-  abline(lm(tmpData$temp ~ tmp5Data$temp), col = "#106470")
+  summary(lm(tmp_data$temp ~ tmp5_data$temp))
+  abline(lm(tmp_data$temp ~ tmp5_data$temp), col = "#106470")
   # R2 = 0.994, which is good enough for me to join the two dataframes
 }
 
 # get chunks of data to fill the daily data ---------------------------------------------
-tmp1 <- dailyData %>% filter(date < "1999-08-10") # before gap
-tmp2 <- dailyData %>% filter(date > "2000-10-09") # after gap
-tmpData <- tmpData %>% 
+tmp1 <- daily_data %>% filter(date < "1999-08-10") # before gap
+tmp2 <- tmp_data %>% 
   filter(date >= "1999-08-10" & date <= "2000-10-09") %>% # gap
   mutate(GDD = NA, CDD = NA, rain = NA, snow = NA, snoP = NA, winD = NA, winS = NA) # set non-existing variables to NA
-dailyData <- rbind(tmp1, tmpData, tmp2) # bind data together to fill gap
-
-# calculate annual mean temperature and annual total precipitation ----------------------
-annualData <- dailyData %>% 
-  filter(year < 2022) %>% 
-  group_by(year) %>% 
-  summarise(temp = mean(temp, na.rm = TRUE),
-            prec = sum(prec , na.rm = TRUE))
-
-# calculate some basic statistics -------------------------------------------------------
-mean(dailyData %>% filter(year < 2022) %>% select(temp) %>% unlist(), na.rm = TRUE)
-# mean and standard deviation of annual mean temperatures
-mean(annualData %>% select(temp) %>% unlist(), na.rm = TRUE)
-sd(annualData %>% select(temp) %>% unlist(), na.rm = TRUE)
-# mean and standard deviation of total annual precipiation
-mean(annualData %>% select(prec) %>% unlist(), na.rm = TRUE)
-sd(annualData %>% select(prec) %>% unlist(), na.rm = TRUE)
+tmp3 <- daily_data %>% filter(date > "2000-10-09") # after gap
+daily_data <- rbind(tmp1, tmp2, tmp3) # bind data together to fill gap
 
 # plot long-term temperature trend ------------------------------------------------------
 if (PLOT) {
+  
+  # calculate annual mean temperature and annual total precipitation --------------------
+  annual_data <- daily_data %>% 
+    filter(year < 2022) %>% 
+    group_by(year) %>% 
+    summarise(temp = mean(temp, na.rm = TRUE),
+              prec = sum(prec , na.rm = TRUE))
+  
+  # plot annual climatic variables ------------------------------------------------------
   par(mar = c(3, 5, 1, 5))
-  plot(x = annualData$year, y = annualData$temp, typ = "l", col = "#901C3B",
+  plot(x = annual_data$year, y = annual_data$temp, typ = "l", col = "#901C3B",
        xlab = "", las = 1, xlim = c(1925, 2025), ylim = c(0, 9), axes = FALSE, 
        ylab = expression(paste("Mean annual temperature (",degree,")", sep = "")))
   axis(side = 1, seq(1925, 2025, by = 25))
   axis(side = 2, las = 1, seq(0, 8, by = 2))
   
-  # plot long-term precipitation trend ----------------------------------------------------
+  # plot long-term precipitation trend --------------------------------------------------
   par (new = TRUE)
-  plot (x = annualData$year, y = annualData$prec, typ = "l", col = "#0072cf", xlab = "", 
+  plot (x = annual_data$year, y = annual_data$prec, typ = "l", col = "#0072cf", xlab = "", 
         las = 1, xlim = c (1925, 2025), ylim = c (0, 1300), axes = FALSE, ylab = "")
   axis (side = 4, seq (0, 1200, by = 400), las = 1)
   mtext (side = 4, line = 3, text = "Total annual precipitation (mm)")
   # TR - There might still be a problem with the precipitation data for 1999/2000 or that 
   # year was just very, very dry, like bone dry!!!
+  
+  # calculate some basic statistics -------------------------------------------------------
+  mean(daily_data %>% filter(year < 2022) %>% select(temp) %>% unlist(), na.rm = TRUE)
+  # mean and standard deviation of annual mean temperatures
+  mean(annual_data %>% select(temp) %>% unlist(), na.rm = TRUE)
+  sd(annual_data %>% select(temp) %>% unlist(), na.rm = TRUE)
+  # mean and standard deviation of total annual precipiation
+  mean(annual_data %>% select(prec) %>% unlist(), na.rm = TRUE)
+  sd(annual_data %>% select(prec) %>% unlist(), na.rm = TRUE)
 }
+
+# add variable for different aggregation periods to air_t (i.e. day, week, month, year)
+#----------------------------------------------------------------------------------------
+airt <- hourly_data %>% select (datetime, temp) %>% 
+  mutate (day = as_date (datetime),
+          month = floor_date (datetime, "month"),
+          year = floor_date (datetime, "year"))
+# the ISO 8601 week started two days before the data, therefore we need the six day 
+# offset (5 * 60.0 * 60.0 * 24.0)
+airt <- add_column (airt, 
+                    week  = floor ((airt$datetime - 
+                                      (min (airt$datetime, na.rm = T) -
+                                         5 * 60.0 * 60.0 * 24.0)) / dweeks (1)) + 1,
+                    .before = 4) 
+
+# create mean airt over varying aggregation periods (i.e. day, week, month, year)
+#----------------------------------------------------------------------------------------
+h_air_t <- hourly_data %>% select (datetime, temp) %>% rename (airt = temp)
+d_air_t <- airt %>% group_by (day) %>% dplyr::summarise (airt = mean (temp, na.rm = T))
+w_air_t <- airt %>% group_by (week) %>% dplyr::summarise (airt = mean (temp, na.rm = T))
+m_air_t <- airt %>% group_by (month) %>% dplyr::summarise (airt = mean (temp, na.rm = T))
+y_air_t <- airt %>% group_by (year) %>% dplyr::summarise (airt = mean (temp, na.rm = T))
+
+# select variables and put them into witnes tree format ---------------------------------
+# highest temporal resolution is hourly for this weather station
+h_air_t <- h_air_t %>% mutate (rank = rank (-airt)) 
+d_air_t <- d_air_t %>% mutate (rank = rank (-airt))
+w_air_t <- w_air_t %>% mutate (rank = rank (-airt))
+m_air_t <- m_air_t %>% mutate (rank = rank (-airt))
+y_air_t <- y_air_t %>% mutate (rank = rank (-airt))
+
+# write climate data to the data directory ----------------------------------------------
+readr::write_csv (h_air_t, file = paste0 (path,"data/airt.csv"))
+# TR - Need to add the other variables and change the naming in the original witness tree code.
 #========================================================================================

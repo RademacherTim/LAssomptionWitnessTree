@@ -25,7 +25,7 @@ wget --content-disposition "https://climate.weather.gc.ca/climate_data/bulk_data
 if [ $? != 0 ]
 then
    # write error message into log
-   echo ${DATE} 'Error: Could not download hourly data.' >> ${WITNESSTREEPATH}logs/logFileDataUpdate.txt 
+   echo ${DATE} 'Error: Could not download hourly data.' >> ${WITNESSTREEPATH}logs/log_file_data_update.txt 
    exit 1 # terminate script and indicate error
 fi
 
@@ -35,7 +35,7 @@ wget --content-disposition "https://climate.weather.gc.ca/climate_data/bulk_data
 if [ $? != 0 ]
 then
    # write error message into log
-   echo ${DATE} 'Error: Could not download daily data.' >> ${WITNESSTREEPATH}logs/logFileDataUpdate.txt 
+   echo ${DATE} 'Error: Could not download daily data.' >> ${WITNESSTREEPATH}logs/log_file_data_update.txt 
    exit 1 # terminate script and indicate error
 fi
 
@@ -44,6 +44,15 @@ fi
 mv en_climate_daily_QC_7014160_${year}_P1D.csv ${WITNESSTREEPATH}data/daily/
 mv en_climate_hourly_QC_7014160_${Month}-${year}_P1H.csv ${WITNESSTREEPATH}data/hourly/
 
+# run the update_climate.R R script to download climate data
+#----------------------------------------------------------------------------------------
+Rscript ${WITNESSTREEPATH}code/rScripts/update_data.R ${WITNESSTREEPATH}
+if [ $? != 0 ]
+then 
+   # write error message into log
+   echo ${DATE} 'Error: Climate data download was not successful.' >> ${WITNESSTREEPATH}logs/log_file_data_update.txt 
+   exit 1 # terminate script and indicate error
+fi
 # write time and date into log file in the tmp/ folder
 #----------------------------------------------------------------------------------------
-echo ${DATE} >> ${WITNESSTREEPATH}logs/logFileDataUpdate.txt
+echo ${DATE} >> ${WITNESSTREEPATH}logs/log_file_data_update.txt
